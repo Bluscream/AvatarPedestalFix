@@ -1,5 +1,10 @@
 ﻿using System;
+using System.Reflection;
+using Harmony;
+using UnityEngine;
 using VRCModLoader;
+using VRC.Core;
+using VRCSDK2;
 
 namespace AvatarPedestalFix
 {
@@ -8,18 +13,57 @@ namespace AvatarPedestalFix
         public const string Name = "AvatarPedestalFix";
         public const string Author = "Herp Derpinstine";
         public const string Company = "NanoNuke @ nanonuke.net";
-        public const string Version = "1.0.0";
+        public const string Version = "1.0.1";
     }
     [VRCModInfo(ModInfo.Name, ModInfo.Version, ModInfo.Author)]
 
     public class AvatarPedestalFix : VRCMod
     {
+        private FieldInfo instance = null;
+        private HarmonyInstance harmonyInstance = null;
+        private bool initialized = false;
+        private ApiWorld currentRoom = null;
+
         void OnApplicationStart()
         {
-            VRCSDK2.RPC rpc1 = (VRCSDK2.RPC)Attribute.GetCustomAttributes(typeof(AvatarPedestal).GetMethod("SetAvatarUse"))[0];
-            rpc1.allowedTargets[0] = VRCSDK2.VRC_EventHandler.VrcTargetType.Local;
-            VRCSDK2.RPC rpc2 = (VRCSDK2.RPC)Attribute.GetCustomAttributes(typeof(VRCSDK2.VRC_AvatarPedestal).GetMethod("SetAvatarUse"))[0];
-            rpc2.allowedTargets[0] = VRCSDK2.VRC_EventHandler.VrcTargetType.Local;
+            instance = typeof(VRC_AvatarPedestal).GetField("Instance", BindingFlags.NonPublic | BindingFlags.Instance);
+            harmonyInstance = HarmonyInstance.Create("AvatarPedestalFix");
+            harmonyInstance.Patch(typeof(VRC_EventDispatcherRFC).GetMethod("TriggerEvent", BindingFlags.Public | BindingFlags.Instance), new HarmonyMethod(typeof(AvatarPedestalFix).GetMethod("TriggerEvent", BindingFlags.NonPublic | BindingFlags.Static)));
+        }
+
+        void OnLevelWasLoaded(int level)
+        {
+            if (level == ((Application.platform == RuntimePlatform.WindowsPlayer) ? 1 : 2) && !initialized)
+                initialized = true;
+        }
+
+        public void OnUpdate()
+        {
+            if (initialized)
+            {
+                if ((RoomManager.currentRoom != null) && !string.IsNullOrEmpty(RoomManager.currentRoom.id) && !string.IsNullOrEmpty(RoomManager.currentRoom.currentInstanceIdOnly))
+                {
+                    if (currentRoom == null)
+                    {
+                        currentRoom = RoomManager.currentRoom;
+                        VRC_AvatarPedestal[] pedestalsInWorld = Resources.FindObjectsOfTypeAll<VRC_AvatarPedestal>();
+                        VRCModLogger.Log("[AvatarPedestalFix] Found " + pedestalsInWorld.Length + " VRC_AvatarPedestal in current world");
+                        foreach (VRC_AvatarPedestal p in pedestalsInWorld)
+                            if (!string.IsNullOrEmpty(p.blueprintId))
+                                foreach (VRC_Trigger trigger in p.GetComponents<VRC_Trigger>())
+                                    trigger.ExecuteTrigger = new Action<VRC_Trigger.TriggerEvent>((VRC_Trigger.TriggerEvent evt) => Networking.RPC(VRC_EventHandler.VrcTargetType.Local, (GameObject)instance.GetValue(p), "SetAvatarUse", new object[0]));
+                    }
+                }
+                else
+                    currentRoom = null; 
+            }
+        }
+
+        private static bool TriggerEvent(VRC_EventHandler __0, VRC_EventHandler.VrcEvent __1, VRC_EventHandler.VrcBroadcastType __2, int __3, float __4)
+        {
+            if (!string.IsNullOrEmpty(__1.ParameterString) && __1.ParameterString.Equals("SetAvatarUse") && (__2 != VRC_EventHandler.VrcBroadcastType.Local))
+                return false;
+            return true;
         }
     }
 }
